@@ -1,0 +1,3 @@
+#!/bin/bash
+
+socat tcp-l:2000,fork,reuseaddr,tcpwrap,deny-table=hosts.deny tcp:localhost:2001
