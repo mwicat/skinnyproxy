@@ -147,7 +147,7 @@ from twisted.manhole import telnet
    proxyport=('Proxy port', 'positional', None, int),
    serverport=('Server port', 'positional', None, int)
    )
-def main(proxyport, serverport):
+def run(proxyport, serverport):
     import os
     if os.path.exists(DB_FILENAME):
         os.remove(DB_FILENAME)
@@ -183,6 +183,9 @@ def main(proxyport, serverport):
     reactor.run()
     db_worker.stop()
 
-# this only runs if the module was *not* imported
+
+def main():
+    plac.call(run)
+
 if __name__ == '__main__':
-    plac.call(main)
+    main()

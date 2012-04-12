@@ -76,7 +76,7 @@ def group_packets_by_session(packets):
     
 @plac.annotations(
    filter=('SQL filter', 'option', 'f'))
-def main(filter=None):
+def run(filter=None):
     engine = create_engine(DB_URL)
 
     metadata = MetaData(engine)
@@ -105,5 +105,8 @@ def main(filter=None):
     reactor.run()
 
 
+def main():
+    plac.call(run)
+
 if __name__ == '__main__':
-    plac.call(main)
+    main()

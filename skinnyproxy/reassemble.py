@@ -52,7 +52,7 @@ def packet_to_message(packet):
 
 @plac.annotations(
    filter=('SQL filter', 'option', 'f'))
-def main(filter=None):
+def run(filter=None):
     assembler = MessageAssembler()
 
     engine = create_engine(sccpreplay.DB_URL)
@@ -87,5 +87,8 @@ def main(filter=None):
 
     tbl_messages.insert().execute(messages)
 
+def main():
+    plac.call(run)
+
 if __name__ == '__main__':
-    plac.call(main)
+    main()
