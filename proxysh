@@ -1,0 +1,3 @@
+#!/bin/bash
+
+ncat --crlf localhost 8787

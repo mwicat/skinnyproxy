@@ -1,3 +1,3 @@
 #!/bin/bash
 
-echo -ne "$1\r\n" | ncat localhost 8787
+echo "$1" | ncat --crlf --send-only localhost 8787
