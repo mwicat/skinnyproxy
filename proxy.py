@@ -4,15 +4,17 @@ from twisted.protocols import portforward
 from twisted.tap.portforward import Options
 
 import datetime
-
+import Queue
 import plac
 
+import threading
 
 from sqlalchemy import *
 
 DB_FILENAME = 'packets.db'
 DB_URL = 'sqlite:///%s' % DB_FILENAME
 
+db_worker = None
 
 session_counter_columns = (
             Column('counter', Integer, primary_key=True),
@@ -45,20 +47,22 @@ def get_next_session():
 
 def insert(session, data, srchost, dsthost, side):
     timestamp = datetime.datetime.now()
-
-    srcport = srchost.host
-    
-    entry = {'session': session, 'timestamp': timestamp, 'data': data, 'srcaddr': srchost.host, 'srcport': srchost.port, 'dstaddr': dsthost.host, 'dstport': dsthost.port, 'side': side}
+    entry = {'session': session,
+             'timestamp': timestamp,
+             'data': data,
+             'srcaddr': srchost.host,
+             'srcport': srchost.port,
+             'dstaddr': dsthost.host,
+             'dstport': dsthost.port,
+             'side': side}
     i = tbl_packets.insert()
     i.execute(entry)
-    #print 'inserting', entry
+
 
 class LoggingProxyClient(portforward.ProxyClient):
 
     def dataReceived(self, data):
-        #log.msg('server sent: ' + repr(data))
-
-        insert(self.peer.session, data, self.transport.getPeer(), self.peer.transport.getPeer(), 'server')
+        db_worker.launch(insert, self.peer.session, data, self.transport.getPeer(), self.peer.transport.getPeer(), 'server')
         portforward.ProxyClient.dataReceived(self, data)
 
 
@@ -87,24 +91,18 @@ class LoggingProxyServer(portforward.ProxyServer):
         self.factory.clients.remove(self)
         
     def dataReceived(self, data):
-        srchost = self.transport.getHost()
-        srcaddr = srchost.host
-        srcport = srchost.port
-
-        #log.msg('client sent: ' + repr(data))
-
-        insert(self.session, data, self.transport.getPeer(), self.peer.transport.getPeer(), 'client')
-
+        db_worker.launch(insert, self.session, data, self.transport.getPeer(), self.peer.transport.getPeer(), 'client')
         portforward.ProxyServer.dataReceived(self, data)
-
-    # def __str__(self):
-        
 
 
 class LoggingProxyFactory(portforward.ProxyFactory):
     clients = []
     blocked = []
     protocol = LoggingProxyServer
+
+    def __init__(self, host, port, db_worker):
+        portforward.ProxyFactory.__init__(self, host, port)
+        self.db_worker = db_worker
 
     def block(self, addr):
         self.blocked.append(addr)
@@ -115,6 +113,28 @@ class LoggingProxyFactory(portforward.ProxyFactory):
 
     def unblock(self, addr):
         self.blocked.remove(addr)
+
+
+class DBWorker(threading.Thread):
+
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.queue = Queue.Queue()
+
+    def launch(self, func, *args, **kwargs):
+        self.queue.put((func, args, kwargs))
+
+    def stop(self):
+        self.queue.put(None)
+
+    def run(self):
+        while True:
+            job = self.queue.get()
+            if job is None:
+                break
+            func, args, kwargs = job
+            func(*args, **kwargs)
+
 
 from twisted.protocols.telnet import Telnet
 Telnet.mode = 'Command'
@@ -145,7 +165,11 @@ def main(proxyport, serverport):
 
     metadata.create_all()
 
-    proxy_factory = LoggingProxyFactory('localhost', serverport)
+    global db_worker
+    db_worker = DBWorker()
+    db_worker.start()
+
+    proxy_factory = LoggingProxyFactory('localhost', serverport, db_worker)
     reactor.listenTCP(proxyport, proxy_factory)
 
 
@@ -155,7 +179,9 @@ def main(proxyport, serverport):
     factory.username = 'guest'
     factory.password = 'guest'
 
+
     reactor.run()
+    db_worker.stop()
 
 # this only runs if the module was *not* imported
 if __name__ == '__main__':
