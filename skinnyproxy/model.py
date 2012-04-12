@@ -14,6 +14,7 @@ packets_columns = (
 
 messages_columns = (
             Column('number', Integer, primary_key=True),
+            Column('type', Integer),
             Column('timestamp', DateTime),
             Column('session', Integer),
             Column('srcaddr', String),

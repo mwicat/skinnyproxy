@@ -43,7 +43,12 @@ def get_next_session():
         cnt += 1
         tbl_session_counter.update(values={'counter': cnt}).execute()
     return cnt
-    
+
+
+import sys; sys.path.append('../skinnygen/src')
+from network import sccpclientprotocol
+from sccp.messagefactory import MessageFactory
+
 
 def insert(session, data, srchost, dsthost, side):
     timestamp = datetime.datetime.now()
@@ -55,8 +60,19 @@ def insert(session, data, srchost, dsthost, side):
              'dstaddr': dsthost.host,
              'dstport': dsthost.port,
              'side': side}
+
+    # if 'x00\x00\x00\x26' in data:
+    #     print 'inserting button'
+
+
+    # message_factory = MessageFactory()
+    # m = sccpclientprotocol.deserialize(data, message_factory)
+    # print 'inserting', m.sccpmessageType
+
     i = tbl_packets.insert()
-    i.execute(entry)
+    r = i.execute(entry)
+    if data[8] == '\x03':
+        print r.last_inserted_ids()[0], 'button'
 
 
 class LoggingProxyClient(portforward.ProxyClient):

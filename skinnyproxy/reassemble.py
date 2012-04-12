@@ -4,9 +4,10 @@ import skinnyproxy
 from skinnyproxy import sccpreplay, model
 
 import sys; sys.path.append('../skinnygen/src')
-
 from network import sccpclientprotocol
 from sccp.messagefactory import MessageFactory
+
+from collections import defaultdict
 
 import plac
 import struct
@@ -24,10 +25,8 @@ class MessageAssembler:
         self.recvd = ""
     
     def feed(self, recd):
-        """
-        Convert int prefixed strings into calls to stringReceived.
-        """
         self.recvd = self.recvd + recd
+        packets_data = []
         while len(self.recvd) >= self.prefixLength:
             length ,= struct.unpack(
                 self.structFormat, self.recvd[:self.prefixLength])
@@ -38,10 +37,11 @@ class MessageAssembler:
             if len(self.recvd) < length + self.prefixLength:
                 break
 
-            packet_data = self.recvd[self.prefixLength:length + self.prefixLength]
+            data = self.recvd[self.prefixLength:length + self.prefixLength]
             self.recvd = self.recvd[length + self.prefixLength:]
-
-            return packet_data
+            packets_data.append(data)
+            
+        return packets_data
 
 
 def packet_to_message(packet):
@@ -53,8 +53,6 @@ def packet_to_message(packet):
 @plac.annotations(
    filter=('SQL filter', 'option', 'f'))
 def run(filter=None):
-    assembler = MessageAssembler()
-
     engine = create_engine(sccpreplay.DB_URL)
     metadata = MetaData(engine)
 
@@ -73,17 +71,24 @@ def run(filter=None):
     j = 1
 
     messages = []
-    data = ''
+    message_factory = MessageFactory()
+
+    channels_assemblers = defaultdict(MessageAssembler)
+    
     for packet in packets:
-        data += packet.data
-        packet_data = assembler.feed(packet.data)
-        if packet_data is not None:
+        channel = (packet['session'], packet['side'])
+        assembler = channels_assemblers[channel]
+        packets_data = assembler.feed(packet.data)
+
+        for packet_data in packets_data:
+            # if packet_data[4] == '\x03':
+            #     print 'button'
             message = packet_to_message(dict(packet))
-            message['data'] = data
-            m = sccpclientprotocol.deserialize(packet_data, MessageFactory())
-            print m
+            message['data'] = packet_data
+            m = sccpclientprotocol.deserialize(packet_data, message_factory)
+            message['type'] = m.sccpmessageType
+            # print packet['number'], message['session'], message['side'], m, '%04X' % m.sccpmessageType
             messages.append(message)
-            data = ''
 
     tbl_messages.insert().execute(messages)
 
