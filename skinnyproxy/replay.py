@@ -49,8 +49,23 @@ def group_packets_by_session(packets):
         res[k].append(packet)
     return res.items()
 
+
 def is_client_packet(packet):
     return packet['side'] == 'client'
+
+
+def get_call_id(message):
+    return getattr(message, 'callId', None)
+
+def get_effective_call_id(message):
+    call_id = get_call_id(message)
+    return call_id if call_id != 0 else None
+
+import subprocess
+
+def injectHex(addr, data_hex):
+    args = ['./proxy_send.sh', "proxy.injectHex('%s', '%s')" % (addr, data_hex)]
+    subprocess.call(args)
 
 class EchoClient(protocol.Protocol):
     """Once connected, send a message, then print the result."""
@@ -59,6 +74,9 @@ class EchoClient(protocol.Protocol):
 
     def __init__(self):
         self.assembler = reassemble.MessageAssembler()
+        self.call_replacements = {}
+        self.unresolved_call_ids = []
+        self.new_call_ids_replaced = set()
     
     def connectionMade(self):
         self.processPacketsToSend()
@@ -92,21 +110,47 @@ class EchoClient(protocol.Protocol):
                 self.logMessage(message, 'schedule')
             else:
                 self.logMessage(message, 'expect')
+                call_id = get_effective_call_id(message)
+                if call_id is not None and call_id not in self.unresolved_call_ids:
+                    self.unresolved_call_ids.append(call_id)
 
     def sendMessage(self,message):
         self.sendString(message.pack())
 
-    def sendString(self, packet_data):
-        if packet_data is not None:
-            message = self.deserialize(packet_data)
-            self.logMessage(message, 'send')
-        self.transport.write(sccpclientprotocol.to_frame(packet_data, sccpclientprotocol.SCCPClientProtocol.structFormat))
+    def sendString(self, message_data):
+        message = self.deserialize(message_data)
+        self.logMessage(message, 'send')
+
+        call_id = get_effective_call_id(message)
+        if call_id is not None:
+            message.callId = self.call_replacements[message.callId]
+            message_data_to_send = message.pack()
+        else:
+            message_data_to_send = message_data
+
+        frame_to_send = sccpclientprotocol.to_frame(message_data_to_send, sccpclientprotocol.SCCPClientProtocol.structFormat)
+        self.transport.write(frame_to_send)
+
+
+    def maybeAddReplacement(self, call_id):
+        if call_id is None:
+            return
+        if call_id not in self.new_call_ids_replaced:
+            self.new_call_ids_replaced.add(call_id)
+            if self.unresolved_call_ids:
+                call_id_to_replace = self.unresolved_call_ids.pop(0)
+                self.call_replacements[call_id_to_replace] = call_id
 
     def dataReceived(self, data):
         packets_data = self.assembler.feed(data)
         for packet_data in packets_data:
             message = self.deserialize(packet_data)
+            call_id = get_effective_call_id(message)
+            self.maybeAddReplacement(call_id)
             self.logMessage(message, 'receive')
+
+        addr_to_inject = self.factory.srcaddr
+        injectHex(addr_to_inject, data.encode('hex'))
 
     def connectionLost(self, reason):
         print "connection lost"
@@ -115,12 +159,15 @@ class EchoClient(protocol.Protocol):
 class EchoFactory(protocol.ClientFactory):
     protocol = EchoClient
 
-    def __init__(self, packets):
+    def __init__(self, packets, srcaddr, srcport):
         self.packets = packets
+        self.srcaddr = srcaddr
+        self.srcport = srcport
         #print self.packets
 
     def buildProtocol(self, *args, **kw):
         prot = EchoClient()
+        prot.factory = self
         prot.packets = self.packets[:]
         return prot
 
@@ -157,11 +204,14 @@ def run(filter=None):
 
     for session, packets in packets_by_session:
         packets = list(packets)
-        factory = EchoFactory(packets)
         packet_first = packets[0]
+
+        srcaddr = packet_first['srcaddr']
+        srcport = packet_first['srcport']
         dstaddr = packet_first['dstaddr']
         dstport = packet_first['dstport']
-        print dstaddr, dstport
+
+        factory = EchoFactory(packets, srcaddr, srcport)
         client_ip = ip_gen.next()
         bindAddress=(client_ip, 0)
         reactor.connectTCP(dstaddr, dstport, factory, bindAddress=bindAddress)

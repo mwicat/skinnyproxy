@@ -71,13 +71,25 @@ def insert(session, data, srchost, dsthost, side):
 
     i = tbl_packets.insert()
     r = i.execute(entry)
-    if data[8] == '\x03':
-        print r.last_inserted_ids()[0], 'button'
+    # if data[8] == '\x03':
+    #     print r.last_inserted_ids()[0], 'button'
 
 
 class LoggingProxyClient(portforward.ProxyClient):
 
+    def connectionLost(self, reason):
+        if not self.peer.attached:
+            return        
+        if self.peer is not None:
+            self.peer.transport.loseConnection()
+            self.peer = None
+        elif self.noisy:
+            log.msg("Unable to connect to peer: %s" % (reason,))
+
+
     def dataReceived(self, data):
+        if not self.peer.attached:
+            return
         db_worker.launch(insert, self.peer.session, data, self.transport.getPeer(), self.peer.transport.getPeer(), 'server')
         portforward.ProxyClient.dataReceived(self, data)
 
@@ -91,24 +103,40 @@ def get_client_addr(client):
 class LoggingProxyServer(portforward.ProxyServer):
     clientProtocolFactory = LoggingProxyClientFactory
 
+    def __init__(self):
+        self.attached = True
+
+    def detach(self):
+        self.attached = False
+        self.peer.transport.loseConnection()
+
     def connectionMade(self):
         addr = get_client_addr(self)
         if addr in self.factory.blocked:
             self.transport.loseConnection()
             return
         self.session = get_next_session()
+        print 'new session %s from %s' % (self.session, addr)
         self.factory.clients.append(self)
         portforward.ProxyServer.connectionMade(self)
 
     def clientConnectionFailed(self, connector, reason):
+        print 'client connection failed'
         self.factory.clients.remove(self)
     
     def clientConnectionLost(self, connector, reason):
+        print 'client connection lost'
         self.factory.clients.remove(self)
         
     def dataReceived(self, data):
+        if not self.attached:
+            return
         db_worker.launch(insert, self.session, data, self.transport.getPeer(), self.peer.transport.getPeer(), 'client')
         portforward.ProxyServer.dataReceived(self, data)
+
+
+def find_clients_by_address(addr, clients):
+    return [client for client in clients if get_client_addr(client) == addr]
 
 
 class LoggingProxyFactory(portforward.ProxyFactory):
@@ -120,13 +148,22 @@ class LoggingProxyFactory(portforward.ProxyFactory):
         portforward.ProxyFactory.__init__(self, host, port)
         self.db_worker = db_worker
 
+    def detach(self, addr):
+        for client in find_clients_by_address(addr, self.clients):
+            client.detach()
+
+    def inject(self, addr, data):
+        for client in find_clients_by_address(addr, self.clients):
+            client.transport.write(data)
+
+    def injectHex(self, addr, data):
+        self.inject(addr, data.decode('hex'))
+
     def block(self, addr):
         self.blocked.append(addr)
-        for client in self.clients:
-            c_addr = get_client_addr(client)
-            if addr == c_addr:
-                client.transport.loseConnection()
-
+        for client in find_clients_by_address(addr, self.clients):
+            client.transport.loseConnection()
+            
     def unblock(self, addr):
         self.blocked.remove(addr)
 
@@ -164,9 +201,9 @@ from twisted.manhole import telnet
    serverport=('Server port', 'positional', None, int)
    )
 def run(proxyport, serverport):
-    import os
-    if os.path.exists(DB_FILENAME):
-        os.remove(DB_FILENAME)
+    # import os
+    # if os.path.exists(DB_FILENAME):
+    #     os.remove(DB_FILENAME)
 
     engine = create_engine(DB_URL)
     #engine.raw_connection().connection.text_factory = str
