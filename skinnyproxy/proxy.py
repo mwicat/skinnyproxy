@@ -64,10 +64,12 @@ def insert(session, data, srchost, dsthost, side):
     # if 'x00\x00\x00\x26' in data:
     #     print 'inserting button'
 
-
     # message_factory = MessageFactory()
     # m = sccpclientprotocol.deserialize(data, message_factory)
-    # print 'inserting', m.sccpmessageType
+
+    # entry_disp = entry.copy()
+    # del entry_disp['data']
+    # print 'inserting', entry_disp, m.sccpmessageType
 
     i = tbl_packets.insert()
     r = i.execute(entry)
@@ -115,6 +117,8 @@ class LoggingProxyServer(portforward.ProxyServer):
         if addr in self.factory.blocked:
             self.transport.loseConnection()
             return
+        if addr in self.factory.detached:
+            self.attached = False
         self.session = get_next_session()
         print 'new session %s from %s' % (self.session, addr)
         self.factory.clients.append(self)
@@ -144,11 +148,13 @@ class LoggingProxyFactory(portforward.ProxyFactory):
     blocked = []
     protocol = LoggingProxyServer
 
-    def __init__(self, host, port, db_worker):
+    def __init__(self, host, port, db_worker, detached=[]):
+        self.detached = detached[:]
         portforward.ProxyFactory.__init__(self, host, port)
         self.db_worker = db_worker
 
     def detach(self, addr):
+        self.attached.append(addr)
         for client in find_clients_by_address(addr, self.clients):
             client.detach()
 
@@ -195,12 +201,15 @@ Telnet.mode = 'Command'
 from twisted.internet import reactor
 from twisted.manhole import telnet
 
+def parse_list(s):
+    return s.split(',')
 
 @plac.annotations(
    proxyport=('Proxy port', 'positional', None, int),
-   serverport=('Server port', 'positional', None, int)
+   serverport=('Server port', 'positional', None, int),
+   detached=('Detached clients', 'option', 'd', parse_list)
    )
-def run(proxyport, serverport):
+def run(proxyport, serverport, detached=[]):
     # import os
     # if os.path.exists(DB_FILENAME):
     #     os.remove(DB_FILENAME)
@@ -222,7 +231,7 @@ def run(proxyport, serverport):
     db_worker = DBWorker()
     db_worker.start()
 
-    proxy_factory = LoggingProxyFactory('localhost', serverport, db_worker)
+    proxy_factory = LoggingProxyFactory('localhost', serverport, db_worker, detached=detached)
     reactor.listenTCP(proxyport, proxy_factory)
 
 

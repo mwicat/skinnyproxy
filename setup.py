@@ -19,6 +19,7 @@ setup(
         'console_scripts': [
             'sccpreplay = skinnyproxy.replay:main',
             'sccpreassemble = skinnyproxy.reassemble:main',
+            'sccpinject = skinnyproxy.inject:main',
             'sccpproxy = skinnyproxy.proxy:main',
             ]
         },

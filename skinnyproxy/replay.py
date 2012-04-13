@@ -1,23 +1,21 @@
-import sys; sys.path.append('../skinnygen/src')
-
-from sqlalchemy import *
-
 import datetime
-
 from itertools import groupby
 from operator import itemgetter
 from collections import defaultdict
 
+import plac
+from sqlalchemy import *
+
+import sys; sys.path.append('../skinnygen/src')
 from network import sccpclientprotocol
 from sccp import messagefactory
 
-DB_URL = 'sqlite:///packets.db'
-
 import reassemble
-
 import model
 
-import plac
+
+DB_URL = 'sqlite:///packets.db'
+
 
 from twisted.internet import reactor, protocol
 
@@ -35,7 +33,7 @@ def append_delta(packets):
     return packets
 
 
-def get_packets(packet_filter=None):
+def get_packets(tbl_packets, packet_filter=None):
     sql_filter = '%s' % packet_filter if packet_filter is not None else ''
     packets_result = tbl_packets.select(sql_filter).execute()
     packets = [dict(p) for p in packets_result]
@@ -61,7 +59,13 @@ def get_effective_call_id(message):
     call_id = get_call_id(message)
     return call_id if call_id != 0 else None
 
+def get_party_id(message):
+    return getattr(message, 'passThruPartyId', None)
+
 import subprocess
+
+def inject(addr, data):
+    injectHex(addr, data.encode('hex'))
 
 def injectHex(addr, data_hex):
     args = ['./proxy_send.sh', "proxy.injectHex('%s', '%s')" % (addr, data_hex)]
@@ -74,9 +78,15 @@ class EchoClient(protocol.Protocol):
 
     def __init__(self):
         self.assembler = reassemble.MessageAssembler()
+
         self.call_replacements = {}
         self.unresolved_call_ids = []
         self.new_call_ids_replaced = set()
+
+        self.party_replacements = {}
+        self.unresolved_party_ids = []
+        self.new_party_ids_replaced = set()
+
     
     def connectionMade(self):
         self.processPacketsToSend()
@@ -122,8 +132,13 @@ class EchoClient(protocol.Protocol):
         self.logMessage(message, 'send')
 
         call_id = get_effective_call_id(message)
-        if call_id is not None:
-            message.callId = self.call_replacements[message.callId]
+        party_id = get_party_id(message)
+
+        if call_id is not None or party_id is not None:
+            if call_id is not None:
+                message.callId = self.call_replacements[message.callId]
+            if party_id is not None:
+                message.passThruPartyId = self.call_replacements[message.passThruPartyId]
             message_data_to_send = message.pack()
         else:
             message_data_to_send = message_data
@@ -132,25 +147,31 @@ class EchoClient(protocol.Protocol):
         self.transport.write(frame_to_send)
 
 
-    def maybeAddReplacement(self, call_id):
-        if call_id is None:
+    def maybeAddReplacement(self, attr, attrs_unresolved, attrs_replaced, attrs_replacements):
+        if attr is None:
             return
-        if call_id not in self.new_call_ids_replaced:
-            self.new_call_ids_replaced.add(call_id)
-            if self.unresolved_call_ids:
-                call_id_to_replace = self.unresolved_call_ids.pop(0)
-                self.call_replacements[call_id_to_replace] = call_id
+        if attr not in attrs_replaced:
+            if attrs_unresolved:
+                attr_to_replace = attrs_unresolved.pop(0)
+                attrs_replacements[attr_to_replace] = attr
+            attrs_replaced.add(attr)
 
     def dataReceived(self, data):
         packets_data = self.assembler.feed(data)
         for packet_data in packets_data:
             message = self.deserialize(packet_data)
+
             call_id = get_effective_call_id(message)
-            self.maybeAddReplacement(call_id)
+            self.maybeAddReplacement(call_id, self.unresolved_call_ids, self.new_call_ids_replaced, self.call_replacements)
+
+            party_id = get_party_id(message)
+            self.maybeAddReplacement(party_id, self.unresolved_party_ids, self.new_party_ids_replaced, self.party_replacements)
+
             self.logMessage(message, 'receive')
 
-        addr_to_inject = self.factory.srcaddr
-        injectHex(addr_to_inject, data.encode('hex'))
+        if self.factory.inject:
+            addr_to_inject = self.factory.srcaddr
+            injectHex(addr_to_inject, data.encode('hex'))
 
     def connectionLost(self, reason):
         print "connection lost"
@@ -159,10 +180,11 @@ class EchoClient(protocol.Protocol):
 class EchoFactory(protocol.ClientFactory):
     protocol = EchoClient
 
-    def __init__(self, packets, srcaddr, srcport):
+    def __init__(self, packets, srcaddr, srcport, inject=False):
         self.packets = packets
         self.srcaddr = srcaddr
         self.srcport = srcport
+        self.inject = inject
         #print self.packets
 
     def buildProtocol(self, *args, **kw):
@@ -179,11 +201,10 @@ class EchoFactory(protocol.ClientFactory):
         print "Connection lost - goodbye!"
 
 
-
-    
 @plac.annotations(
-   filter=('SQL filter', 'option', 'f'))
-def run(filter=None):
+   filter=('SQL filter', 'option', 'f'),
+   inject=('Do proxy injection', 'flag', 'i'))
+def run(filter=None, inject=False):
     engine = create_engine(DB_URL)
 
     metadata = MetaData(engine)
@@ -196,7 +217,7 @@ def run(filter=None):
 
     metadata.create_all()
 
-    packets = get_packets(filter)
+    packets = get_packets(tbl_packets, filter)
     packets = append_delta(packets)
     packets_by_session = group_packets_by_session(packets)
 
@@ -211,7 +232,7 @@ def run(filter=None):
         dstaddr = packet_first['dstaddr']
         dstport = packet_first['dstport']
 
-        factory = EchoFactory(packets, srcaddr, srcport)
+        factory = EchoFactory(packets, srcaddr, srcport, inject=inject)
         client_ip = ip_gen.next()
         bindAddress=(client_ip, 0)
         reactor.connectTCP(dstaddr, dstport, factory, bindAddress=bindAddress)
