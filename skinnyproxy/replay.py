@@ -13,9 +13,16 @@ from sccp import messagefactory
 import reassemble
 import model
 
+from twisted.protocols.telnet import Telnet
+Telnet.mode = 'Command'
+
+from twisted.internet import reactor
+from twisted.manhole import telnet
+
 
 DB_URL = 'sqlite:///packets.db'
 
+injections = []
 
 from twisted.internet import reactor, protocol
 
@@ -169,22 +176,34 @@ class EchoClient(protocol.Protocol):
 
             self.logMessage(message, 'receive')
 
-        if self.factory.inject:
-            addr_to_inject = self.factory.srcaddr
-            injectHex(addr_to_inject, data.encode('hex'))
+            if self.factory.inject:
+                addr_to_inject = self.factory.srcaddr
+                framed_data = sccpclientprotocol.to_frame(packet_data, sccpclientprotocol.SCCPClientProtocol.structFormat)
+                if self.factory.debug:
+                    injection = addr_to_inject, framed_data, message
+                    injections.append(injection)
+                else:
+                    inject(addr_to_inject, framed_data)
 
     def connectionLost(self, reason):
         print "connection lost"
 
+def step():
+    if injections:
+        addr, framed_data, message = injections.pop(0)
+        if injections:
+            print injections[0]
+        inject(addr, framed_data)
 
 class EchoFactory(protocol.ClientFactory):
     protocol = EchoClient
 
-    def __init__(self, packets, srcaddr, srcport, inject=False):
+    def __init__(self, packets, srcaddr, srcport, inject=False, debug=False):
         self.packets = packets
         self.srcaddr = srcaddr
         self.srcport = srcport
         self.inject = inject
+        self.debug = debug
         #print self.packets
 
     def buildProtocol(self, *args, **kw):
@@ -203,8 +222,10 @@ class EchoFactory(protocol.ClientFactory):
 
 @plac.annotations(
    filter=('SQL filter', 'option', 'f'),
-   inject=('Do proxy injection', 'flag', 'i'))
-def run(filter=None, inject=False):
+   inject=('Do proxy injection', 'flag', 'i'),
+   debug=('Debug mode', 'flag', 'd')
+   )
+def run(filter=None, inject=False, debug=False):
     engine = create_engine(DB_URL)
 
     metadata = MetaData(engine)
@@ -232,10 +253,18 @@ def run(filter=None, inject=False):
         dstaddr = packet_first['dstaddr']
         dstport = packet_first['dstport']
 
-        factory = EchoFactory(packets, srcaddr, srcport, inject=inject)
+        factory = EchoFactory(packets, srcaddr, srcport, inject=inject, debug=debug)
         client_ip = ip_gen.next()
         bindAddress=(client_ip, 0)
         reactor.connectTCP(dstaddr, dstport, factory, bindAddress=bindAddress)
+
+    factory = telnet.ShellFactory()
+    port = reactor.listenTCP( 8989, factory)
+    factory.namespace['injections'] = injections
+    factory.namespace['step'] = step
+    factory.username = 'guest'
+    factory.password = 'guest'
+
 
     reactor.run()
 

@@ -49,6 +49,7 @@ import sys; sys.path.append('../skinnygen/src')
 from network import sccpclientprotocol
 from sccp.messagefactory import MessageFactory
 
+import sccp
 
 def insert(session, data, srchost, dsthost, side):
     timestamp = datetime.datetime.now()
@@ -238,9 +239,21 @@ def run(proxyport, serverport, detached=[]):
     factory = telnet.ShellFactory()
     port = reactor.listenTCP( 8787, factory)
     factory.namespace['proxy'] = proxy_factory
+
+    def injectMsg(addr, message):
+        from network import sccpclientprotocol
+        framed = sccpclientprotocol.to_frame(message.pack())
+        proxy_factory.inject(addr, framed)
+    factory.namespace['injectMsg'] = injectMsg
+    factory.namespace['injectHex'] = proxy_factory.injectHex
+
+    import pkgutil
+    for imp, name, flag in pkgutil.iter_modules(sccp.__path__):
+        mod = imp.find_module(name).load_module(name)
+        factory.namespace[name] = mod
+        
     factory.username = 'guest'
     factory.password = 'guest'
-
 
     reactor.run()
     db_worker.stop()
