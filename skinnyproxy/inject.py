@@ -17,8 +17,10 @@ import replay
 
 
 @plac.annotations(
-   filter=('SQL filter', 'option', 'f'))
-def run(filter=None):
+   filter=('SQL filter', 'option', 'f'),
+   dry_run=('Don\'t actually run any commands; just print them.', 'flag', 'n')
+   )
+def run(filter=None, dry_run=False):
     engine = create_engine(replay.DB_URL)
     metadata = MetaData(engine)
 
@@ -28,10 +30,12 @@ def run(filter=None):
     packets = replay.get_packets(tbl_packets, filter)
 
     for packet in packets:
-        print packet
         packet_data = packet['data']
         framed_data = sccpclientprotocol.to_frame(packet_data, sccpclientprotocol.SCCPClientProtocol.structFormat)
-        replay.inject(packet['dstaddr'], framed_data)
+        if dry_run:
+            print packet
+        else:
+            replay.inject(packet['dstaddr'], framed_data)
 
 
 def main():
