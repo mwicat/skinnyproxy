@@ -1,8 +1,8 @@
 ## Installation
 
-sudo apt-get install python python-pip python-twisted
-sudo pip install -e git+git://github.com/mwicat/skinnygen.git#egg=skinnygen
-sudo pip install -e git+git://github.com/mwicat/skinnyproxy.git#egg=skinnyproxy
+    sudo apt-get install python python-pip python-twisted
+    sudo pip install -e git+git://github.com/mwicat/skinnygen.git#egg=skinnygen
+    sudo pip install -e git+git://github.com/mwicat/skinnyproxy.git#egg=skinnyproxy
 
 
 ## Show filter parameters
