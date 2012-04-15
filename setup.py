@@ -13,7 +13,7 @@ setup(
     description = ("Skinny proxy for recording and replaying traffic"),
     license = "GPLv3",
     packages=['skinnyproxy'],
-    install_requires = ['plac'],
+    install_requires = ['plac', 'sqlalchemy'],
     long_description=read('README'),
     entry_points = {
         'console_scripts': [
